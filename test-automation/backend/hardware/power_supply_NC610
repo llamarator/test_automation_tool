@@ -1,0 +1,173 @@
+import asyncio
+import pyvisa
+from typing import Dict, Any
+from .base_instrument import BaseInstrument
+
+class PowerSupply(BaseInstrument):
+    """Driver para fuente de alimentación con interfaz VISA/SCPI"""
+    
+    def __init__(self, resource_name: str):
+        super().__init__(resource_name)
+        self.rm = pyvisa.ResourceManager()
+        self.instrument = None
+        self.voltage_set = 0.0
+        self.current_limit = 1.0
+        self.output_enabled = False
+
+    async def connect(self):
+        """Conectar a la fuente de alimentación"""
+        try:
+            self.instrument = self.rm.open_resource(self.resource_name)
+            self.instrument.timeout = 5000  # 5 segundos timeout
+            
+            # Configuración inicial
+            identity = self.instrument.query("*IDN?").strip()
+            self.connected = True
+            print(f"Conectado a fuente: {identity}")
+            
+            # Reset y configuración inicial
+            await self.reset()
+            return True
+            
+        except Exception as e:
+            self.connected = False
+            raise ConnectionError(f"Error conectando fuente {self.resource_name}: {str(e)}")
+
+    async def disconnect(self):
+        """Desconectar de la fuente"""
+        try:
+            if self.instrument:
+                await self.set_output(False)  # Apagar salida por seguridad
+                self.instrument.close()
+            self.connected = False
+        except Exception as e:
+            print(f"Error desconectando fuente: {str(e)}")
+
+    async def reset(self):
+        """Reset de la fuente a valores seguros"""
+        if not self.connected:
+            raise RuntimeError("Fuente no conectada")
+        
+        self.instrument.write("*RST")
+        await asyncio.sleep(0.1)
+        
+        # Valores seguros por defecto
+        await self.set_voltage(0.0)
+        await self.set_current_limit(0.1)
+        await self.set_output(False)
+
+    async def set_voltage(self, voltage: float):
+        """Establecer voltaje de salida"""
+        if not self.connected:
+            raise RuntimeError("Fuente no conectada")
+        
+        if voltage < 0 or voltage > 30:  # Límites de seguridad
+            raise ValueError("Voltaje fuera de rango (0-30V)")
+        
+        self.instrument.write(f"VOLT {voltage}")
+        self.voltage_set = voltage
+        await asyncio.sleep(0.01)  # Tiempo de establecimiento
+
+    async def set_current_limit(self, current: float):
+        """Establecer límite de corriente"""
+        if not self.connected:
+            raise RuntimeError("Fuente no conectada")
+        
+        if current < 0 or current > 5:  # Límites de seguridad
+            raise ValueError("Corriente fuera de rango (0-5A)")
+        
+        self.instrument.write(f"CURR {current}")
+        self.current_limit = current
+        await asyncio.sleep(0.01)
+
+    async def set_output(self, enabled: bool):
+        """Habilitar/deshabilitar salida"""
+        if not self.connected:
+            raise RuntimeError("Fuente no conectada")
+        
+        state = "ON" if enabled else "OFF"
+        self.instrument.write(f"OUTP {state}")
+        self.output_enabled = enabled
+        await asyncio.sleep(0.01)
+
+    async def measure_voltage(self) -> float:
+        """Medir voltaje actual de salida"""
+        if not self.connected:
+            raise RuntimeError("Fuente no conectada")
+        
+        try:
+            voltage_str = self.instrument.query("MEAS:VOLT?")
+            return float(voltage_str.strip())
+        except Exception as e:
+            raise RuntimeError(f"Error midiendo voltaje: {str(e)}")
+
+    async def measure_current(self) -> float:
+        """Medir corriente actual de salida"""
+        if not self.connected:
+            raise RuntimeError("Fuente no conectada")
+        
+        try:
+            current_str = self.instrument.query("MEAS:CURR?")
+            return float(current_str.strip())
+        except Exception as e:
+            raise RuntimeError(f"Error midiendo corriente: {str(e)}")
+
+    async def get_status(self) -> Dict[str, Any]:
+        """Obtener estado completo de la fuente"""
+        if not self.connected:
+            return {"status": "disconnected"}
+        
+        try:
+            voltage_measured = await self.measure_voltage()
+            current_measured = await self.measure_current()
+            
+            return {
+                "status": "connected",
+                "output_enabled": self.output_enabled,
+                "voltage_set": self.voltage_set,
+                "current_limit": self.current_limit,
+                "readings": {
+                    "voltage": voltage_measured,
+                    "current": current_measured,
+                    "power": voltage_measured * current_measured
+                }
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    async def run_voltage_sweep(self, start_v: float, end_v: float, steps: int, callback=None):
+        """Realizar un barrido de voltaje y reportar mediciones"""
+        if not self.output_enabled:
+            await self.set_output(True)
+        
+        voltage_step = (end_v - start_v) / (steps - 1)
+        results = []
+        
+        for i in range(steps):
+            voltage = start_v + (i * voltage_step)
+            await self.set_voltage(voltage)
+            await asyncio.sleep(0.05)  # Tiempo de establecimiento
+            
+            # Medir valores
+            v_measured = await self.measure_voltage()
+            i_measured = await self.measure_current()
+            
+            result = {
+                "step": i + 1,
+                "voltage_set": voltage,
+                "voltage_measured": v_measured,
+                "current_measured": i_measured,
+                "power": v_measured * i_measured
+            }
+            
+            results.append(result)
+            
+            # Callback para tiempo real
+            if callback:
+                await callback({
+                    "type": "sweep_point",
+                    "data": result,
+                    "progress": ((i + 1) / steps) * 100
+                })
+        
+        return results
