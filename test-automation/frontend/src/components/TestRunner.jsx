@@ -7,41 +7,11 @@ const TestRunner = ({ onStartTest, onStopTest, isRunning, currentTest }) => {
   const [testProgress, setTestProgress] = useState(0)
   const [currentStep, setCurrentStep] = useState('')
   
-  // Cargar secuencias disponibles
-  useEffect(() => {
-    fetch('http://localhost:8000/api/sequences')
-      .then(res => res.json())
-      .then(data => setTestSequences(data))
-      .catch(err => console.error('Error cargando secuencias:', err))
-  }, [])
-
-  const handleStartTest = () => {
-    if (!selectedSequence) {
-      toast.error('Selecciona una secuencia de prueba')
-      return
-    }
-    
-    const sequence = testSequences.find(seq => seq.id === selectedSequence)
-    if (sequence) {
-      onStartTest(sequence)
-      toast.success(`Iniciando prueba: ${sequence.name}`)
-      setTestProgress(0)
-      setCurrentStep('Inicializando...')
-    }
-  }
-
-  const handleStopTest = () => {
-    onStopTest()
-    toast.error('Prueba detenida por el usuario')
-    setTestProgress(0)
-    setCurrentStep('')
-  }
-
-  // Secuencias predefinidas para demo
+  // Secuencias predefinidas para demo (con IDs únicos)
   const demoSequences = [
     {
-      id: 'basic_power_test',
-      name: 'Prueba Básica de Alimentación',
+      id: 'demo_basic_power_test',
+      name: 'Prueba Básica de Alimentación (Demo)',
       description: 'Verifica voltajes de salida del DUT',
       steps: [
         { name: 'Configurar fuente a 5V', type: 'power_supply', voltage: 5.0, current_limit: 1.0 },
@@ -52,8 +22,8 @@ const TestRunner = ({ onStartTest, onStopTest, isRunning, currentTest }) => {
       ]
     },
     {
-      id: 'full_functional_test',
-      name: 'Prueba Funcional Completa',
+      id: 'demo_full_functional_test',
+      name: 'Prueba Funcional Completa (Demo)',
       description: 'Suite completa de pruebas funcionales',
       steps: [
         { name: 'Inicialización', type: 'power_supply', voltage: 0, current_limit: 0.5 },
@@ -67,8 +37,63 @@ const TestRunner = ({ onStartTest, onStopTest, isRunning, currentTest }) => {
       ]
     }
   ]
+  
+  // Cargar secuencias disponibles del servidor
+  useEffect(() => {
+    fetch('http://localhost:8000/api/sequences')
+      .then(res => {
+        if (res.ok) {
+          return res.json()
+        }
+        throw new Error('No se pudieron cargar las secuencias del servidor')
+      })
+      .then(data => {
+        // Validar que las secuencias tengan la estructura correcta
+        const validSequences = data.filter(seq => 
+          seq && seq.id && seq.name && Array.isArray(seq.steps)
+        )
+        setTestSequences(validSequences)
+      })
+      .catch(err => {
+        console.warn('Error cargando secuencias del servidor:', err)
+        // No es crítico, se pueden usar solo las demo
+        setTestSequences([])
+      })
+  }, [])
 
-  const currentSequenceData = [...testSequences, ...demoSequences].find(seq => seq.id === selectedSequence)
+  // Combinar secuencias del servidor con las demo (evitando duplicados)
+  const allSequences = [
+    ...testSequences,
+    ...demoSequences.filter(demo => 
+      !testSequences.some(server => server.id === demo.id)
+    )
+  ]
+
+  const handleStartTest = () => {
+    if (!selectedSequence) {
+      toast.error('Selecciona una secuencia de prueba')
+      return
+    }
+    
+    const sequence = allSequences.find(seq => seq.id === selectedSequence)
+    if (sequence && Array.isArray(sequence.steps)) {
+      onStartTest(sequence)
+      toast.success(`Iniciando prueba: ${sequence.name}`)
+      setTestProgress(0)
+      setCurrentStep('Inicializando...')
+    } else {
+      toast.error('La secuencia seleccionada no es válida')
+    }
+  }
+
+  const handleStopTest = () => {
+    onStopTest()
+    toast.error('Prueba detenida por el usuario')
+    setTestProgress(0)
+    setCurrentStep('')
+  }
+
+  const currentSequenceData = allSequences.find(seq => seq.id === selectedSequence)
 
   return (
     <div className="space-y-6">
@@ -87,40 +112,47 @@ const TestRunner = ({ onStartTest, onStopTest, isRunning, currentTest }) => {
       <div className="bg-white/10 rounded-lg p-6">
         <h3 className="text-lg font-semibold text-white mb-4">Seleccionar Secuencia</h3>
         
-        <div className="grid gap-4 md:grid-cols-2">
-          {[...testSequences, ...demoSequences].map((sequence) => (
-            <div
-              key={sequence.id}
-              className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                selectedSequence === sequence.id
-                  ? 'border-blue-400 bg-blue-500/20'
-                  : 'border-white/20 bg-white/5 hover:bg-white/10'
-              }`}
-              onClick={() => setSelectedSequence(sequence.id)}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <h4 className="text-white font-medium">{sequence.name}</h4>
-                  <p className="text-blue-200 text-sm mt-1">{sequence.description}</p>
-                  <div className="flex items-center space-x-4 mt-2 text-xs text-blue-300">
-                    <span>📋 {sequence.steps?.length || 0} pasos</span>
-                    <span>⏱️ {sequence.duration_estimate || 'N/A'}</span>
+        {allSequences.length === 0 ? (
+          <div className="text-center py-8">
+            <div className="text-4xl mb-2">🔄</div>
+            <p className="text-blue-200">Cargando secuencias...</p>
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            {allSequences.map((sequence) => (
+              <div
+                key={sequence.id}
+                className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                  selectedSequence === sequence.id
+                    ? 'border-blue-400 bg-blue-500/20'
+                    : 'border-white/20 bg-white/5 hover:bg-white/10'
+                }`}
+                onClick={() => setSelectedSequence(sequence.id)}
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h4 className="text-white font-medium">{sequence.name}</h4>
+                    <p className="text-blue-200 text-sm mt-1">{sequence.description}</p>
+                    <div className="flex items-center space-x-4 mt-2 text-xs text-blue-300">
+                      <span>📋 {Array.isArray(sequence.steps) ? sequence.steps.length : 0} pasos</span>
+                      <span>⏱️ {sequence.duration_estimate || 'N/A'}</span>
+                    </div>
                   </div>
+                  
+                  {selectedSequence === sequence.id && (
+                    <div className="w-5 h-5 bg-blue-400 rounded-full flex items-center justify-center">
+                      <div className="w-2 h-2 bg-white rounded-full"></div>
+                    </div>
+                  )}
                 </div>
-                
-                {selectedSequence === sequence.id && (
-                  <div className="w-5 h-5 bg-blue-400 rounded-full flex items-center justify-center">
-                    <div className="w-2 h-2 bg-white rounded-full"></div>
-                  </div>
-                )}
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Detalles de la Secuencia Seleccionada */}
-      {currentSequenceData && (
+      {currentSequenceData && Array.isArray(currentSequenceData.steps) && (
         <div className="bg-white/10 rounded-lg p-6">
           <h3 className="text-lg font-semibold text-white mb-4">
             Pasos de la Secuencia: {currentSequenceData.name}
@@ -128,17 +160,17 @@ const TestRunner = ({ onStartTest, onStopTest, isRunning, currentTest }) => {
           
           <div className="space-y-2">
             {currentSequenceData.steps.map((step, index) => (
-              <div key={index} className="flex items-center space-x-3 p-3 bg-white/5 rounded-lg">
+              <div key={`${currentSequenceData.id}-step-${index}`} className="flex items-center space-x-3 p-3 bg-white/5 rounded-lg">
                 <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-bold">
                   {index + 1}
                 </div>
                 <div className="flex-1">
-                  <div className="text-white font-medium">{step.name}</div>
+                  <div className="text-white font-medium">{step.name || `Paso ${index + 1}`}</div>
                   <div className="text-blue-200 text-sm">
-                    Tipo: {step.type}
-                    {step.voltage && ` | Voltaje: ${step.voltage}V`}
-                    {step.expected_value && ` | Esperado: ${step.expected_value}`}
-                    {step.delay_ms && ` | Retardo: ${step.delay_ms}ms`}
+                    Tipo: {step.type || 'N/A'}
+                    {step.voltage !== undefined && ` | Voltaje: ${step.voltage}V`}
+                    {step.expected_value !== undefined && ` | Esperado: ${step.expected_value}`}
+                    {step.delay_ms !== undefined && ` | Retardo: ${step.delay_ms}ms`}
                   </div>
                 </div>
                 <div className={`w-2 h-2 rounded-full ${
@@ -153,7 +185,7 @@ const TestRunner = ({ onStartTest, onStopTest, isRunning, currentTest }) => {
       )}
 
       {/* Barra de Progreso */}
-      {isRunning && currentSequenceData && (
+      {isRunning && currentSequenceData && Array.isArray(currentSequenceData.steps) && (
         <div className="bg-white/10 rounded-lg p-6">
           <div className="flex justify-between items-center mb-2">
             <span className="text-white font-medium">Progreso de la Prueba</span>
@@ -178,9 +210,9 @@ const TestRunner = ({ onStartTest, onStopTest, isRunning, currentTest }) => {
         {!isRunning ? (
           <button
             onClick={handleStartTest}
-            disabled={!selectedSequence}
+            disabled={!selectedSequence || !currentSequenceData || !Array.isArray(currentSequenceData.steps)}
             className={`px-8 py-3 rounded-lg font-medium transition-all ${
-              selectedSequence
+              selectedSequence && currentSequenceData && Array.isArray(currentSequenceData.steps)
                 ? 'bg-green-600 hover:bg-green-700 text-white shadow-lg hover:shadow-xl'
                 : 'bg-gray-600 text-gray-400 cursor-not-allowed'
             }`}
